@@ -104,7 +104,6 @@ def updateCache(cache, window, hashesSize, bestHash, height):
                 prevHashes = prevHashes[idx:]
             newHashes.extend(prevHashes[:(hashesSize - len(newHashes))])
             newVersions.extend(prevVersions[:(sinceDiffChange - len(newVersions))])
-            break
     return Cache(hashes=tuple(newHashes),
                  versions=tuple(newVersions),
                  height=height,

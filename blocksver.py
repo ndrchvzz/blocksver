@@ -204,7 +204,7 @@ def makeVersionTable(stats, tot):
                   stats[ver],
                   formatPercent(stats[ver], tot))
                  for ver in sorted(stats, key=stats.get, reverse=True)) + \
-           (('', tot, formatPercent(tot, tot)),)
+           ((('', tot, formatPercent(tot, tot)),) if len(stats) > 1 else (('',)))
 
 def findId(bit, time, bip9forks):
     for fid, fdata in bip9forks.items():

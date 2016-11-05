@@ -27,20 +27,22 @@ CACHEFILE   = 'blocksver-fd323311-9a38-47ce-9295-1bb1a03569cb.py'
 WINDOW      = 2016
 THRESHOLD   = 1916
 HASHES_SIZE = 6
-UNKNOWN     = 'unknown'
+UNKNOWN_ID  = 'unknown'
+UNKNOWN_BIT = '?'
 TIME_FMT    = '%Y-%m-%d'
 NO_BITS     = 'none'
 HASHRATEK   = 2**48 / 0xffff / 600
 BASE64      = string.ascii_uppercase + string.ascii_lowercase + string.digits + '+/'
 
 # These must be kept up-to-date as they are not provided by the API yet
-BIP9_BIT_MAP         = { 0: 'csv',
-                         1: 'segwit' }
+BIP9_BIT_MAP         = { 'csv'         : 0,
+                         'segwit'      : 1,
+                       }
 
 BIP9_START           = 'startTime'
 BIP9_TIMEOUT         = 'timeout'
 BIP9_STATUS          = 'status'
-BIP9_STATUS_STARTED  = 'defined'
+BIP9_STATUS_DEFINED  = 'defined'
 BIP9_STATUS_STARTED  = 'started'
 BIP9_STATUS_LOCKEDIN = 'locked_in'
 BIP9_STATUS_ACTIVE   = 'active'
@@ -53,7 +55,7 @@ def retrieve(method, *params):
     return json.loads(response.decode('ascii'))
 
 def encodeVersions(cache, base):
-    sortedKeys = sorted(set(cache.stats.keys()))
+    sortedKeys = sorted(cache.stats.keys())
     if len(sortedKeys) <= len(base):
         mapping = dict(zip(sortedKeys, base))
         return ''.join(mapping[n] for n in cache.versions)
@@ -62,7 +64,7 @@ def encodeVersions(cache, base):
         return tuple(mapping[n] for n in cache.versions)
 
 def decodeVersions(cache, base):
-    sortedKeys = sorted(set(cache.stats.keys()))
+    sortedKeys = sorted(cache.stats.keys())
     if len(sortedKeys) <= len(base):
         mapping = dict(zip(base, sortedKeys))
     else:
@@ -84,7 +86,6 @@ def saveCache(cache, cachefilename, base):
 def updateCache(cache, window, hashesSize, bestHash, height):
     newVersions = []
     newHashes = []
-    prevVersions = cache.versions
     prevHashes = cache.hashes
     sinceDiffChange = height % window
     h = bestHash
@@ -92,10 +93,10 @@ def updateCache(cache, window, hashesSize, bestHash, height):
         if len(newHashes) < hashesSize:
             newHashes.append(h)
         blockData = retrieve('getblock', h)
-        ver = int(blockData['version'])
-        newVersions.append(ver)
-        h = str(blockData['previousblockhash'])
+        newVersions.append(int(blockData['version']))
+        h = blockData['previousblockhash']
         if h in prevHashes:
+            prevVersions = cache.versions
             idx = prevHashes.index(h)
             if idx > 0:
                 s = 'block was' if idx == 1 else (str(idx) + ' blocks were')
@@ -104,6 +105,7 @@ def updateCache(cache, window, hashesSize, bestHash, height):
                 prevHashes = prevHashes[idx:]
             newHashes.extend(prevHashes[:(hashesSize - len(newHashes))])
             newVersions.extend(prevVersions[:(sinceDiffChange - len(newVersions))])
+            prevHashes = []
     return Cache(hashes=tuple(newHashes),
                  versions=tuple(newVersions),
                  height=height,
@@ -162,7 +164,7 @@ def blocksToDateEstimate(blocks, height):
             ' ' + (datetime.now().replace(microsecond=0) + \
             timedelta(days=blocks / 144.0)).strftime(TIME_FMT)
 
-def formatWelcome(cache, window, bestHash, height, cachePath, difficulty, bip9forks, threshold):
+def formatWelcome(cache, window, bestHash, height, difficulty, bip9forks, threshold):
     toWindowEnd = window - (height % window)
     toHalving = 210000 - (height % 210000)
     newBlocksCount = min(height % window,
@@ -184,6 +186,7 @@ def formatWelcome(cache, window, bestHash, height, cachePath, difficulty, bip9fo
             '\n' +
             'A block can signal support for a softfork using the bits 0-28, only\n' +
             'if the bit is within the time ranges above and if bit 29 is set.\n' +
+            'Signalling can start at the first diff change after the START time.\n' +
             'Lock-in threshold is ' + str(threshold) + '/' + str(window) + ' blocks (' +
             '{:.2%}'.format(threshold / float(window)) + ')\n')
 
@@ -205,18 +208,17 @@ def makeVersionTable(stats, window):
            (('', tot, formatPercent(tot, tot)),)
 
 def findId(bit, time, bip9forks):
-    for fid in bip9forks:
-        f = bip9forks[fid]
+    for fid, fdata in bip9forks.items():
         if bit == findBit(fid, bip9forks) and \
-           bip9forks[fid][BIP9_STATUS] in [BIP9_STATUS_STARTED, BIP9_STATUS_LOCKEDIN] and \
-           time > datetime.fromtimestamp(f[BIP9_START]) and \
-           time < datetime.fromtimestamp(f[BIP9_TIMEOUT]):
+           fdata[BIP9_STATUS] in [BIP9_STATUS_STARTED, BIP9_STATUS_LOCKEDIN] and \
+           time > datetime.fromtimestamp(fdata[BIP9_START]) and \
+           time < datetime.fromtimestamp(fdata[BIP9_TIMEOUT]):
             return fid
-    return UNKNOWN
+    return UNKNOWN_ID
 
 def makeBitsTable(stats, tot, bip9forks):
     return (('ID', 'BIT', 'BLOCKS', 'SHARE'),) + \
-           tuple((NO_BITS if ver == NO_BITS else findId(int(ver), datetime.now(), bip9forks),
+           tuple((NO_BITS if ver == NO_BITS else findId(ver, datetime.now(), bip9forks),
                   ver,
                   stats[ver],
                   formatPercent(stats[ver], tot))
@@ -229,11 +231,8 @@ def formatTimestamp(timestamp):
     return datetime.fromtimestamp(timestamp).strftime(TIME_FMT)
 
 def findBit(fid, bip9forks):
-    for k, v in BIP9_BIT_MAP.items():
-        if fid == v:
-            return k
-    print('WARNING: you should define the bit of "' + fid + '"')
-    return max(BIP9_BIT_MAP.keys()) + 1
+    # in the future the API could provide this information
+    return BIP9_BIT_MAP.get(fid, UNKNOWN_BIT)
 
 def formatAllData(cache, window, height, bip9forks):
     return 'Version of all blocks since the last difficulty adjustment:\n' + \
@@ -247,10 +246,10 @@ def main():
     cachePath = os.path.join(tempfile.gettempdir(), CACHEFILE)
     cache = loadCache(cachePath, BASE64)
     chainInfo = retrieve('getblockchaininfo')
-    bestHash = str(chainInfo['bestblockhash'])
-    height = chainInfo['blocks']
+    bestHash = chainInfo['bestblockhash']
+    height = int(chainInfo['blocks'])
     bip9forks = chainInfo['bip9_softforks']
-    print(formatWelcome(cache, WINDOW, bestHash, height, cachePath, chainInfo['difficulty'], bip9forks, THRESHOLD))
+    print(formatWelcome(cache, WINDOW, bestHash, height, chainInfo['difficulty'], bip9forks, THRESHOLD))
     if cache.height == 0:
         print('Please wait while retrieving latest block versions and caching them...\n')
     if len(cache.hashes) < 1 or cache.hashes[0] != bestHash:

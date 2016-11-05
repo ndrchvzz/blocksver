@@ -87,7 +87,7 @@ def updateCache(cache, window, hashesSize, bestHash, height):
     newVersions = []
     newHashes = []
     prevHashes = cache.hashes
-    sinceDiffChange = height % window
+    sinceDiffChange = (height % window) + 1
     h = bestHash
     while len(newVersions) < sinceDiffChange:
         if len(newHashes) < hashesSize:
@@ -132,15 +132,15 @@ def isBip9(ver):
 
 def versionbitsStats(stats):
     bitStats = {}
-    for ver in stats:
+    for ver, occur in stats.items():
         if isBip9(ver):
             bitMask = 1
             for bit in range(29):
                 if (ver & bitMask) == bitMask:
-                    bitStats[bit] = bitStats.get(bit, 0) + stats[ver]
+                    bitStats[bit] = bitStats.get(bit, 0) + occur
                 bitMask *= 2
         else:
-            bitStats[NO_BITS] = bitStats.get(NO_BITS, 0) + stats[ver]
+            bitStats[NO_BITS] = bitStats.get(NO_BITS, 0) + occur
     return bitStats
 
 def formatTable(table, gap='  '):
@@ -197,8 +197,7 @@ def formatBits(ver):
     else:
         return binStr.replace('1', '*')
 
-def makeVersionTable(stats, window):
-    tot = sum(stats.values())
+def makeVersionTable(stats, tot):
     return (('VERSION       28  24  20  16  12   8   4   0', 'BLOCKS', 'SHARE'),) + \
            (('               |   |   |   |   |   |   |   |',),) + \
            tuple(('{:#010x}  '.format(ver) + formatBits(ver),
@@ -234,12 +233,14 @@ def findBit(fid, bip9forks):
     # in the future the API could provide this information
     return BIP9_BIT_MAP.get(fid, UNKNOWN_BIT)
 
-def formatAllData(cache, window, height, bip9forks):
+def formatAllData(cache, bip9forks):
+    tot = sum(cache.stats.values())
     return 'Version of all blocks since the last difficulty adjustment:\n' + \
            '\n' + \
-           formatTable(makeVersionTable(cache.stats, window)) + '\n' + \
+           formatTable(makeVersionTable(cache.stats, tot)) + \
+           '\n' + \
            formatTable(makeBitsTable(versionbitsStats(cache.stats),
-                                     sum(cache.stats.values()),
+                                     tot,
                                      bip9forks))
 
 def main():
@@ -255,6 +256,6 @@ def main():
     if len(cache.hashes) < 1 or cache.hashes[0] != bestHash:
         cache = updateCache(cache, WINDOW, HASHES_SIZE, bestHash, height)
         saveCache(cache, cachePath, BASE64)
-    print(formatAllData(cache, WINDOW, height, bip9forks))
+    print(formatAllData(cache, bip9forks))
 
 main()

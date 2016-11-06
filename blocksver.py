@@ -83,7 +83,7 @@ def saveCache(cache, cachefilename, base):
     with open(cachefilename, 'w') as f:
         f.write(pprint.saferepr(cache._replace(versions=encodeVersions(cache, base))))
 
-def updateCache(cache, window, hashesSize, bestHash, height):
+def updateCache(cache, window, hashesSize, bestHash, height, retriever):
     newVersions = []
     newHashes = []
     prevHashes = cache.hashes
@@ -92,18 +92,16 @@ def updateCache(cache, window, hashesSize, bestHash, height):
     while len(newVersions) < sinceDiffChange:
         if len(newHashes) < hashesSize:
             newHashes.append(h)
-        blockData = retrieve('getblock', h)
+        blockData = retriever(h)
         newVersions.append(int(blockData['version']))
         h = blockData['previousblockhash']
         if h in prevHashes:
             prevVersions = cache.versions
             idx = prevHashes.index(h)
             if idx > 0:
-                s = 'block was' if idx == 1 else (str(idx) + ' blocks were')
-                print('The last ' + s + ' orphaned!\n')
                 prevVersions = prevVersions[idx:]
                 prevHashes = prevHashes[idx:]
-            newHashes.extend(prevHashes[:(hashesSize - len(newHashes))])
+            newHashes.extend(prevHashes[:min(hashesSize, sinceDiffChange) - len(newHashes)])
             newVersions.extend(prevVersions[:(sinceDiffChange - len(newVersions))])
             prevHashes = []
     return Cache(hashes=tuple(newHashes),
@@ -128,6 +126,7 @@ def blocksToTimeStr(blocks):
     return '{:.1f} {}'.format(float(val), unit)
 
 def isBip9(ver):
+    # this is equivalent to checking if bits 29-31 are set to 001
     return ver > 0x20000000 and ver < 0x40000000
 
 def versionbitsStats(stats):
@@ -184,8 +183,8 @@ def formatWelcome(cache, window, bestHash, height, difficulty, bip9forks, thresh
                                   bip9forks[fid][BIP9_STATUS])
                                  for fid in sorted(bip9forks, key=lambda x: bip9forks.get(x)[BIP9_START]))) + '\n' +
             '\n' +
-            'A block can signal support for a softfork using the bits 0-28, only\n' +
-            'if the bit is within the time ranges above and if bit 29 is set.\n' +
+            'A block can signal support for a softfork using the bits 0-28, only if the\n' +
+            'bit is within the time ranges above, and if bits 31-30-29 are set to 0-0-1.\n' +
             'Signalling can start at the first diff change after the START time.\n' +
             'Lock-in threshold is ' + str(threshold) + '/' + str(window) + ' blocks (' +
             '{:.2%}'.format(threshold / float(window)) + ')\n')
@@ -209,9 +208,7 @@ def makeVersionTable(stats, tot):
 def findId(bit, time, bip9forks):
     for fid, fdata in bip9forks.items():
         if bit == findBit(fid, bip9forks) and \
-           fdata[BIP9_STATUS] in [BIP9_STATUS_STARTED, BIP9_STATUS_LOCKEDIN] and \
-           time > datetime.fromtimestamp(fdata[BIP9_START]) and \
-           time < datetime.fromtimestamp(fdata[BIP9_TIMEOUT]):
+           fdata[BIP9_STATUS] in (BIP9_STATUS_STARTED, BIP9_STATUS_LOCKEDIN):
             return fid
     return UNKNOWN_ID
 
@@ -254,8 +251,110 @@ def main():
     if cache.height == 0:
         print('Please wait while retrieving latest block versions and caching them...\n')
     if len(cache.hashes) < 1 or cache.hashes[0] != bestHash:
-        cache = updateCache(cache, WINDOW, HASHES_SIZE, bestHash, height)
+        rpcRetriever = lambda h: retrieve('getblock', h)
+        cache = updateCache(cache, WINDOW, HASHES_SIZE, bestHash, height, rpcRetriever)
         saveCache(cache, cachePath, BASE64)
     print(formatAllData(cache, bip9forks))
+
+#################################### TESTS ####################################
+
+def assertEquals(actual, expected):
+    if actual != expected:
+        raise Exception('\nexpected:\n"' + str(expected).replace('\n', '\\n\n') + '"\n' +
+                        'but was:\n"' + str(actual).replace('\n', '\\n\n') + '"\n')
+
+def test_updateCache():
+       # blocks 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54
+    versions = (1, 3, 3, 1, 2, 0, 9, 4, 3, 2, 1, 0, 0, 3, 2, 2, 9, 0, 9,
+              # 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73
+                4, 0, 4, 2, 3, 8, 8, 2, 8, 3, 0, 0, 1, 2, 1, 9, 8, 4, 3)
+
+    vfmt = 'h{:02d}'
+    retriever_map = { vfmt.format(i + 1): {'version'          : versions[i],
+                                           'previousblockhash': vfmt.format(i) }
+                      for i in range(0, len(versions)) }
+
+    testRetriever = lambda h: retriever_map[h]
+
+    window = 6
+    hashesSize = 3
+
+    # 3 new blocks from an empty cache
+    cache = Cache((), (), 0, {})
+    cache = updateCache(cache, window, hashesSize, 'h03', 38, testRetriever)
+    assertEquals(cache, Cache((3, 3, 1),          ('h03', 'h02', 'h01'), 38, { 3:2, 1:1 }))
+
+    # 1 new block from 3 cached blocks
+    cache = updateCache(cache, window, hashesSize, 'h04', 39, testRetriever)
+    assertEquals(cache, Cache((1, 3, 3, 1),       ('h04', 'h03', 'h02'), 39, { 1:2, 3:2 }))
+
+    # 1 new block from 4 cached blocks
+    cache = updateCache(cache, window, hashesSize, 'h05', 40, testRetriever)
+    assertEquals(cache, Cache((2, 1, 3, 3, 1),    ('h05', 'h04', 'h03'), 40, { 2:1, 1:2, 3:2 }))
+
+    # 1 new block from 5 cached blocks - last block of a period
+    cache = updateCache(cache, window, hashesSize, 'h06', 41, testRetriever)
+    assertEquals(cache, Cache((0, 2, 1, 3, 3, 1), ('h06', 'h05', 'h04'), 41, { 0:1, 2:1, 1:2, 3:2 }))
+
+    # 1 new block from 6 cached blocks - first block of a period
+    cache = updateCache(cache, window, hashesSize, 'h07', 42, testRetriever)
+    assertEquals(cache, Cache((9,),               ('h07',),              42, { 9:1 }))
+
+    # 1 new block from 1 cached blocks - second block of a period
+    cache = updateCache(cache, window, hashesSize, 'h08', 43, testRetriever)
+    assertEquals(cache, Cache((4, 9),             ('h08', 'h07'),        43, { 4:1, 9:1 }))
+
+    # 2 new blocks from 2 cached block
+    cache = updateCache(cache, window, hashesSize, 'h10', 45, testRetriever)
+    assertEquals(cache, Cache((2, 3, 4, 9),       ('h10', 'h09', 'h08'), 45, { 2:1, 3:1, 4:1, 9:1 }))
+
+    # 5 new blocks from 4 cached blocks - straight to the first 3 blocks of a new period
+    cache = updateCache(cache, window, hashesSize, 'h15', 50, testRetriever)
+    assertEquals(cache, Cache((2, 3, 0),          ('h15', 'h14', 'h13'), 50, { 2:1, 3:1, 0:1 }))
+
+    # 3 new blocks from 3 cached blocks
+    cache = updateCache(cache, window, hashesSize, 'h18', 53, testRetriever)
+    assertEquals(cache, Cache((0, 9, 2, 2, 3, 0), ('h18', 'h17', 'h16'), 53, { 0:2, 9:1, 2:2, 3:1 }))
+
+    # 4 new blocks from 6 cached blocks
+    cache = updateCache(cache, window, hashesSize, 'h22', 57, testRetriever)
+    assertEquals(cache, Cache((4, 0, 4, 9),       ('h22', 'h21', 'h20'), 57, { 4:2, 0:1, 9:1 }))
+
+    # 2 new blocks from 4 cached blocks - the last 2 blocks have been orphaned
+    cache =             Cache((1, 7, 4, 9),       ('g22', 'g21', 'h20'), 57, { 1:1, 7:1, 4:1, 9:1 })
+    cache = updateCache(cache, window, hashesSize, 'h24', 59, testRetriever)
+    assertEquals(cache, Cache((3, 2, 4, 0, 4, 9), ('h24', 'h23', 'h22'), 59, { 3:1, 2:1, 4:2, 0:1, 9:1 }))
+
+    # 1 new blocks from 6 cached blocks - same height but the last block has been orphaned
+    cache =             Cache((7, 2, 4, 0, 4, 9), ('g24', 'h23', 'h22'), 59, { 7:1, 2:1, 4:2, 0:1, 9:1 })
+    cache = updateCache(cache, window, hashesSize, 'h24', 59, testRetriever)
+    assertEquals(cache, Cache((3, 2, 4, 0, 4, 9), ('h24', 'h23', 'h22'), 59, { 3:1, 2:1, 4:2, 0:1, 9:1 }))
+
+    # 2 new blocks from 6 cached blocks - all 3 blocks in the cache have been orphaned
+    cache =             Cache((7, 0, 7, 2, 7, 8), ('g24', 'g23', 'g22'), 59, { 7:3, 0:1, 2:1, 8:1 })
+    cache = updateCache(cache, window, hashesSize, 'h26', 61, testRetriever)
+    assertEquals(cache, Cache((8, 8),             ('h26', 'h25'),        61, { 8:2 }))
+
+    # 2 new blocks from 2 cached blocks - all 2 blocks in the cache have been orphaned
+    cache =             Cache((7, 3),             ('g26', 'g25'),        61, { 7:1, 3:1 })
+    cache = updateCache(cache, window, hashesSize, 'h28', 63, testRetriever)
+    assertEquals(cache, Cache((8, 2, 8, 8),       ('h28', 'h27', 'h26'), 63, { 8:3, 2:1 }))
+
+    # 10 new blocks from 4 cached blocks - skips a whole period
+    cache = updateCache(cache, window, hashesSize, 'h38', 73, testRetriever)
+    assertEquals(cache, Cache((3, 4),             ('h38', 'h37'),        73, { 3:1, 4:1 }))
+
+    # 5 blocks backwards reorg from 2 cached blocks
+    cache =             Cache((2, 7),             ('g38', 'g37'),        73, { 2:1, 7:1 })
+    cache = updateCache(cache, window, hashesSize, 'h33', 68, testRetriever)
+    assertEquals(cache, Cache((2, 1, 0),          ('h33', 'h32', 'h31'), 68, { 2:1, 1:1, 0:1 }))
+
+def testAll():
+    test_updateCache()
+
+############################### START EXECUTION ###############################
+
+# all tests run in about 3ms on a rpi2 so no harm in running them every time
+testAll()
 
 main()

@@ -178,12 +178,12 @@ def formatWelcome(cache, window, bestHash, height, difficulty, bip9forks, thresh
             'Next halving ' + blocksToDateEstimate(toHalving, height) + '\n' +
             '\n' +
             formatTable([['ID', 'BIT', 'START', 'TIMEOUT', 'STATUS']] +
-                            list((fid,
-                                  findBit(fid, bip9forks),
-                                  formatTimestamp(bip9forks[fid][BIP9_START]),
-                                  formatTimestamp(bip9forks[fid][BIP9_TIMEOUT]),
-                                  bip9forks[fid][BIP9_STATUS])
-                                 for fid in sorted(bip9forks, key=lambda x: bip9forks.get(x)[BIP9_START]))) + '\n' +
+                        list((fid,
+                              findBit(fid, bip9forks),
+                              formatTimestamp(bip9forks[fid][BIP9_START]),
+                              formatTimestamp(bip9forks[fid][BIP9_TIMEOUT]),
+                              bip9forks[fid][BIP9_STATUS])
+                             for fid in sorted(bip9forks, key=lambda k: (bip9forks[k][BIP9_START],k)))) + '\n' +
             '\n' +
             'A block can signal support for a softfork using the bits 0-28, only if the\n' +
             'bit is within the time ranges above, and if bits 31-30-29 are set to 0-0-1.\n' +
@@ -198,13 +198,18 @@ def formatBits(ver):
     else:
         return binStr.replace('1', '*')
 
+def sortedStatsKeys(stats):
+    return sorted(stats.keys(),
+                  key=lambda k: (stats[k], k),
+                  reverse=True)
+
 def makeVersionTable(stats, tot):
     return (('VERSION       28  24  20  16  12   8   4   0', 'BLOCKS', 'SHARE'),) + \
            (('               |   |   |   |   |   |   |   |',),) + \
            tuple(('{:#010x}  '.format(ver) + formatBits(ver),
                   stats[ver],
                   formatPercent(stats[ver], tot))
-                 for ver in sorted(stats, key=stats.get, reverse=True)) + \
+                 for ver in sortedStatsKeys(stats)) + \
            ((('', tot, formatPercent(tot, tot)),) if len(stats) > 1 else (('',)))
 
 def findId(bit, time, bip9forks):
@@ -220,7 +225,7 @@ def makeBitsTable(stats, tot, bip9forks):
                   ver,
                   stats[ver],
                   formatPercent(stats[ver], tot))
-                 for ver in sorted(stats, key=stats.get, reverse=True))
+                 for ver in sortedStatsKeys(stats))
 
 def formatPercent(n, total):
     return '{:.2%}'.format(n / float(total))

@@ -101,9 +101,11 @@ def updateCache(cache, window, hashesSize, bestHash, height, retriever):
             if idx > 0:
                 prevVersions = prevVersions[idx:]
                 prevHashes = prevHashes[idx:]
-            newHashes.extend(prevHashes[:min(hashesSize, sinceDiffChange) - len(newHashes)])
-            newVersions.extend(prevVersions[:(sinceDiffChange - len(newVersions))])
-            prevHashes = []
+            if len(newVersions) + len(prevVersions) == sinceDiffChange:
+                newHashes.extend(prevHashes[:hashesSize - len(newHashes)])
+                newVersions.extend(prevVersions)
+                break  # we have all the data needed, nothing else to do
+            prevHashes = []  # the cached versions are bad, carry on with the loop
     return Cache(hashes=tuple(newHashes),
                  versions=tuple(newVersions),
                  height=height,
@@ -264,18 +266,15 @@ def assertEquals(actual, expected):
                         'but was:\n"' + str(actual).replace('\n', '\\n\n') + '"\n')
 
 def test_updateCache():
-       # blocks 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54
-    versions = (1, 3, 3, 1, 2, 0, 9, 4, 3, 2, 1, 0, 0, 3, 2, 2, 9, 0, 9,
-              # 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71 72 73
-                4, 0, 4, 2, 3, 8, 8, 2, 8, 3, 0, 0, 1, 2, 1, 9, 8, 4, 3)
-
-    vfmt = 'h{:02d}'
-    retriever_map = { vfmt.format(i + 1): {'version'          : versions[i],
-                                           'previousblockhash': vfmt.format(i) }
+    # hashes  h01 h02 h03 h04 h05 h06 h07 h08 h09 h10 h11 h12 h13 h14 h15 h16 h17 h18 h19
+    versions = (1,  3,  3,  1,  2,  0,  9,  4,  3,  2,  1,  0,  0,  3,  2,  2,  9,  0,  9,
+    # hashes  h20 h21 h22 h23 h24 h25 h26 h27 h28 h29 h30 h31 h32 h33 h34 h35 h36 h37 h38
+                4,  0,  4,  2,  3,  8,  8,  2,  8,  3,  0,  0,  1,  2,  1,  9,  8,  4,  3)
+    hfmt = 'h{:02d}'
+    retriever_map = { hfmt.format(i + 1): {'version'          : versions[i],
+                                           'previousblockhash': hfmt.format(i) }
                       for i in range(0, len(versions)) }
-
     testRetriever = lambda h: retriever_map[h]
-
     window = 6
     hashesSize = 3
 
@@ -326,12 +325,22 @@ def test_updateCache():
     cache = updateCache(cache, window, hashesSize, 'h22', 57, testRetriever)
     assertEquals(cache, Cache(      (4, 0, 4, 9,), ('h22', 'h21', 'h20'), 57, { 4:2, 0:1, 9:1 }))
 
+    # 2 new blocks from 3 cached blocks - the cache is smaller than it should be, so it should not be used
+    cache =             Cache(      (4, 8, 4,   ), ('h22', 'h21', 'h20'), 57, { 4:2, 8:1 })
+    cache = updateCache(cache, window, hashesSize, 'h24', 59, testRetriever)
+    assertEquals(cache, Cache((3, 2, 4, 0, 4, 9,), ('h24', 'h23', 'h22'), 59, { 3:1, 2:1, 4:2, 0:1, 9:1 }))
+
+    # 2 new blocks from 5 cached blocks - the cache is bigger than it should be, so it should not be used
+    cache =             Cache(   (4, 8, 4, 9, 9,), ('h22', 'h21', 'h20'), 57, { 4:2, 8:1, 9:2 })
+    cache = updateCache(cache, window, hashesSize, 'h24', 59, testRetriever)
+    assertEquals(cache, Cache((3, 2, 4, 0, 4, 9,), ('h24', 'h23', 'h22'), 59, { 3:1, 2:1, 4:2, 0:1, 9:1 }))
+
     # 2 new blocks from 4 cached blocks - the last 2 blocks have been orphaned
     cache =             Cache(      (1, 7, 4, 9,), ('g22', 'g21', 'h20'), 57, { 1:1, 7:1, 4:1, 9:1 })
     cache = updateCache(cache, window, hashesSize, 'h24', 59, testRetriever)
     assertEquals(cache, Cache((3, 2, 4, 0, 4, 9,), ('h24', 'h23', 'h22'), 59, { 3:1, 2:1, 4:2, 0:1, 9:1 }))
 
-    # 1 new blocks from 6 cached blocks - same height but the last block has been orphaned
+    # 1 new block from 6 cached blocks - same height but the last block has been orphaned
     cache =             Cache((7, 2, 4, 0, 4, 9,), ('g24', 'h23', 'h22'), 59, { 7:1, 2:1, 4:2, 0:1, 9:1 })
     cache = updateCache(cache, window, hashesSize, 'h24', 59, testRetriever)
     assertEquals(cache, Cache((3, 2, 4, 0, 4, 9,), ('h24', 'h23', 'h22'), 59, { 3:1, 2:1, 4:2, 0:1, 9:1 }))

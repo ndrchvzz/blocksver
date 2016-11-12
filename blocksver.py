@@ -23,7 +23,7 @@ from collections import namedtuple, Counter
 from fractions import Fraction as F
 
 RPC_CLIENT  = 'bitcoin-cli'
-CACHEFILE   = 'blocksver-fd323311-9a38-47ce-9295-1bb1a03569cb.py'
+CACHEFILE   = 'blocksver-4fb3a07c6900.py'
 WINDOW      = 2016
 THRESHOLD   = 1916
 HASHES_SIZE = 6
@@ -31,7 +31,6 @@ UNKNOWN_ID  = 'unknown'
 UNKNOWN_BIT = '?'
 TIME_FMT    = '%Y-%m-%d'
 NO_BITS     = 'none'
-HASHRATEK   = 2**48 / 0xffff / 600
 BASE64      = string.ascii_uppercase + string.ascii_lowercase + string.digits + '+/'
 
 # These must be kept up-to-date as they are not provided by the API yet
@@ -125,7 +124,7 @@ def blocksToTimeStr(blocks):
     else:
         val = 24 * days
         unit = 'hours'
-    return '{:.1f} {}'.format(float(val), unit)
+    return formatFract(val, 1) + ' ' + unit
 
 def isBip9(ver):
     # this is equivalent to checking if bits 29-31 are set to 001
@@ -159,6 +158,22 @@ def formatTable(table, gap='  '):
 def formatBlocks(n, middle=''):
     return str(n) + middle + ' block' + ('' if n == 1 else 's')
 
+def formatFract(val, fractDigits):
+    return ('{:.' + str(fractDigits) + 'f}').format(float(val))
+
+def formatSignif(n, signif):
+    intLength = len(str(int(abs(n))))
+    fractDigits = (signif - intLength) if signif > intLength else 0
+    return formatFract(n, fractDigits)
+
+def withPrefix(n, length):
+    prefixes = ('', 'k', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y')
+    p = min(abs(len(str(int(n))) + 2 - length) // 3, len(prefixes) - 1)
+    return formatSignif(n / (10 ** (p * 3)), length) + ' ' + prefixes[p]
+
+def formatNetworkHashRate(difficulty):
+    return withPrefix(difficulty * 2**48 / (0xffff * 600), 4) + 'h/s'
+
 def blocksToDateEstimate(blocks, height):
     return 'at block ' + str(height + blocks) + \
             ' - in ' + formatBlocks(blocks) + ' ~' + blocksToTimeStr(blocks) + \
@@ -173,8 +188,8 @@ def formatWelcome(cache, window, bestHash, height, difficulty, bip9forks, thresh
     return ('Best height: ' + str(height) + ' - ' +
                formatBlocks(newBlocksCount, ' new') + '\n' +
             'Best hash: ' + bestHash + '\n' +
-            'Network hashrate: ' + str(int(round(HASHRATEK * difficulty / 10**15))) + ' Ph/s\n' +
-            'Next diff-change ' + blocksToDateEstimate(toWindowEnd, height) + '\n' +
+            'Network hashrate: ' + formatNetworkHashRate(difficulty) + '\n' +
+            'Next retarget ' + blocksToDateEstimate(toWindowEnd, height) + '\n' +
             'Next halving ' + blocksToDateEstimate(toHalving, height) + '\n' +
             '\n' +
             formatTable([['ID', 'BIT', 'START', 'TIMEOUT', 'STATUS']] +
@@ -187,7 +202,7 @@ def formatWelcome(cache, window, bestHash, height, difficulty, bip9forks, thresh
             '\n' +
             'A block can signal support for a softfork using the bits 0-28, only if the\n' +
             'bit is within the time ranges above, and if bits 31-30-29 are set to 0-0-1.\n' +
-            'Signalling can start at the first diff change after the START time.\n' +
+            'Signalling can start at the first retarget after the START time.\n' +
             'Lock-in threshold is ' + str(threshold) + '/' + str(window) + ' blocks (' +
             '{:.2%}'.format(threshold / float(window)) + ')\n')
 
@@ -239,7 +254,7 @@ def findBit(fid, bip9forks):
 
 def formatAllData(cache, bip9forks):
     tot = sum(cache.stats.values())
-    return 'Version of all blocks since the last difficulty adjustment:\n' + \
+    return 'Version of all blocks since the last retarget:\n' + \
            '\n' + \
            formatTable(makeVersionTable(cache.stats, tot)) + \
            '\n' + \
@@ -254,7 +269,8 @@ def main():
     bestHash = chainInfo['bestblockhash']
     height = int(chainInfo['blocks'])
     bip9forks = chainInfo['bip9_softforks']
-    print(formatWelcome(cache, WINDOW, bestHash, height, chainInfo['difficulty'], bip9forks, THRESHOLD))
+    print(formatWelcome(cache, WINDOW, bestHash, height,
+                        F(chainInfo['difficulty']), bip9forks, THRESHOLD))
     if cache.height == 0:
         print('Please wait while retrieving latest block versions and caching them...\n')
     if len(cache.hashes) < 1 or cache.hashes[0] != bestHash:
@@ -269,6 +285,27 @@ def assertEquals(actual, expected):
     if actual != expected:
         raise Exception('\nexpected:\n"' + str(expected).replace('\n', '\\n\n') + '"\n' +
                         'but was:\n"' + str(actual).replace('\n', '\\n\n') + '"\n')
+
+def test_withPrefix():
+    assertEquals(withPrefix(0, 4),                   '0.000 ')
+    assertEquals(withPrefix(1, 4),                   '1.000 ')
+    assertEquals(withPrefix(1.02, 4),                '1.020 ')
+    assertEquals(withPrefix(7, 4),                   '7.000 ')
+    assertEquals(withPrefix(99, 4),                 '99.00 ')
+    assertEquals(withPrefix(998, 4),               '998.0 ')
+    assertEquals(withPrefix(9986, 4),             '9986 ')
+    assertEquals(withPrefix(99834, 2),             '100 k')
+    assertEquals(withPrefix(99834, 3),              '99.8 k')
+    assertEquals(withPrefix(99834, 4),              '99.83 k')
+    assertEquals(withPrefix(99834, 5),           '99834 ')
+    assertEquals(withPrefix(998723, 4),            '998.7 k')
+    assertEquals(withPrefix(9984233.2321, 4),     '9984 k')
+    assertEquals(withPrefix(99423423, 4),           '99.42 M')
+    assertEquals(withPrefix(994232330.324, 4),     '994.2 M')
+    assertEquals(withPrefix(1999342231348274203.543987, 4),     '1999 P')
+    assertEquals(withPrefix(1999842231348274203.234, 4),        '2000 P')
+    assertEquals(withPrefix(908345092323134827423, 4),           '908.3 E')
+    assertEquals(withPrefix(99827346823874345092323134827423, 4), '99827347 Y')
 
 def test_updateCache():
     # hashes  h01 h02 h03 h04 h05 h06 h07 h08 h09 h10 h11 h12 h13 h14 h15 h16 h17 h18 h19
@@ -370,11 +407,12 @@ def test_updateCache():
     assertEquals(cache, Cache(         (2, 1, 0,), ('h33', 'h32', 'h31'), 68, { 2:1, 1:1, 0:1 }))
 
 def testAll():
+    test_withPrefix()
     test_updateCache()
 
 ############################### START EXECUTION ###############################
 
-# all tests run in about 3ms on a rpi2 so no harm in running them every time
+# all tests run in few ms on a rpi2 so no harm in running them every time
 testAll()
 
 main()

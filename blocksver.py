@@ -29,7 +29,8 @@ THRESHOLD   = 1916
 HASHES_SIZE = 6
 UNKNOWN_ID  = 'unknown'
 UNKNOWN_BIT = '?'
-TIME_FMT    = '%Y-%m-%d'
+DATE_FMT    = '%Y-%m-%d'
+DATETIME_FMT= '%Y-%m-%d %H:%M'
 NO_BITS     = 'none'
 BASE64      = string.ascii_uppercase + string.ascii_lowercase + string.digits + '+/'
 
@@ -175,22 +176,29 @@ def formatNetworkHashRate(difficulty):
     return withPrefix(difficulty * 2**48 / (0xffff * 600), 4) + 'h/s'
 
 def blocksToDateEstimate(blocks, height):
-    return 'at block ' + str(height + blocks) + \
-            ' - in ' + formatBlocks(blocks) + ' ~' + blocksToTimeStr(blocks) + \
-            ' ' + (datetime.now().replace(microsecond=0) + \
-            timedelta(days=blocks / 144.0)).strftime(TIME_FMT)
+    return (height + blocks,
+            blocks,
+            (datetime.now().replace(microsecond=0) +
+             timedelta(days = blocks / 144.0)).strftime(DATETIME_FMT),
+            blocksToTimeStr(blocks))
 
-def formatWelcome(cache, window, bestHash, height, difficulty, bip9forks, threshold):
+def formatEvents(height, window):
     toWindowEnd = window - (height % window)
     toHalving = 210000 - (height % 210000)
+    return formatTable((('EVENT', 'AT BLOCK', 'DELTA', 'EXPECTED ON', 'EXPECTED IN'),
+                        ('retarget',) + blocksToDateEstimate(toWindowEnd, height),
+                        ('halving',) + blocksToDateEstimate(toHalving, height)))
+
+def formatWelcome(cache, window, bestHash, height, difficulty, bip9forks, threshold):
     newBlocksCount = min(height % window,
                          height - cache.height)
-    return ('Best height: ' + str(height) + ' - ' +
-               formatBlocks(newBlocksCount, ' new') + '\n' +
+    return ('BLOCKSVER - which BIP9 softfork will activate and when\n' +
+            #'\n' +
+            'Best height: ' + str(height) + ' - ' + formatBlocks(newBlocksCount, ' new') + '\n' +
             'Best hash: ' + bestHash + '\n' +
             'Network hashrate: ' + formatNetworkHashRate(difficulty) + '\n' +
-            'Next retarget ' + blocksToDateEstimate(toWindowEnd, height) + '\n' +
-            'Next halving ' + blocksToDateEstimate(toHalving, height) + '\n' +
+            '\n' +
+            formatEvents(height, window) + '\n' +
             '\n' +
             formatTable([['ID', 'BIT', 'START', 'TIMEOUT', 'STATUS']] +
                         list((fid,
@@ -204,7 +212,8 @@ def formatWelcome(cache, window, bestHash, height, difficulty, bip9forks, thresh
             'bit is within the time ranges above, and if bits 31-30-29 are set to 0-0-1.\n' +
             'Signalling can start at the first retarget after the START time.\n' +
             'Lock-in threshold is ' + str(threshold) + '/' + str(window) + ' blocks (' +
-            '{:.2%}'.format(threshold / float(window)) + ')\n')
+            '{:.2%}'.format(threshold / float(window)) + ')\n' +
+            'See https://github.com/bitcoin/bips/blob/master/bip-0009.mediawiki\n')
 
 def formatBits(ver):
     binStr = '{0:032b}'.format(ver).replace('0', '.')
@@ -246,7 +255,7 @@ def formatPercent(n, total):
     return '{:.2%}'.format(n / float(total))
 
 def formatTimestamp(timestamp):
-    return datetime.fromtimestamp(timestamp).strftime(TIME_FMT)
+    return datetime.fromtimestamp(timestamp).strftime(DATE_FMT)
 
 def findBit(fid, bip9forks):
     # in the future the API could provide this information
@@ -254,7 +263,7 @@ def findBit(fid, bip9forks):
 
 def formatAllData(cache, bip9forks):
     tot = sum(cache.stats.values())
-    return 'Version of all blocks since the last retarget:\n' + \
+    return 'Version of all blocks since the last retarget: (can signal: o=yes *=no)\n' + \
            '\n' + \
            formatTable(makeVersionTable(cache.stats, tot)) + \
            '\n' + \

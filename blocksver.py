@@ -50,7 +50,7 @@ BIP9_STATUS_FAILED   = 'failed'
 
 Cache = namedtuple('Cache', 'versions hashes height stats')
 
-def retrieve(method, *params):
+def rpcRetrieve(method, *params):
     response = subprocess.check_output((RPC_CLIENT, method) + params)
     return json.loads(response.decode('ascii'))
 
@@ -77,13 +77,13 @@ def loadCache(cachefilename, base):
             cache = eval(f.read())
         return cache._replace(versions=decodeVersions(cache, base))
     else:
-        return Cache(versions=(), hashes=(), height=0, stats={})
+        return Cache(versions=(), hashes=(), height=-1, stats={})
 
 def saveCache(cache, cachefilename, base):
     with open(cachefilename, 'w') as f:
         f.write(pprint.saferepr(cache._replace(versions=encodeVersions(cache, base))))
 
-def updateCache(cache, window, hashesSize, bestHash, height, retriever):
+def updateCache(cache, window, hashesSize, bestHash, height, retrieveBlock):
     newVersions = []
     newHashes = []
     prevHashes = cache.hashes
@@ -92,7 +92,7 @@ def updateCache(cache, window, hashesSize, bestHash, height, retriever):
     while len(newVersions) < sinceDiffChange:
         if len(newHashes) < hashesSize:
             newHashes.append(h)
-        blockData = retriever(h)
+        blockData = retrieveBlock(h)
         newVersions.append(int(blockData['version']))
         h = blockData['previousblockhash']
         if h in prevHashes:
@@ -185,7 +185,7 @@ def blocksToDateEstimate(blocks, height):
 def formatEvents(height, window):
     toWindowEnd = window - (height % window)
     toHalving = 210000 - (height % 210000)
-    return formatTable((('EVENT', 'AT BLOCK', 'DELTA', 'EXPECTED ON', 'EXPECTED IN'),
+    return formatTable((('EVENT', 'AT-BLOCK', 'DELTA', 'EXPECTED-ON', 'EXPECTED-IN'),
                         ('retarget',) + blocksToDateEstimate(toWindowEnd, height),
                         ('halving',) + blocksToDateEstimate(toHalving, height)))
 
@@ -193,7 +193,6 @@ def formatWelcome(cache, window, bestHash, height, difficulty, bip9forks, thresh
     newBlocksCount = min(height % window,
                          height - cache.height)
     return ('BLOCKSVER - which BIP9 softfork will activate and when\n' +
-            #'\n' +
             'Best height: ' + str(height) + ' - ' + formatBlocks(newBlocksCount, ' new') + '\n' +
             'Best hash: ' + bestHash + '\n' +
             'Network hashrate: ' + formatNetworkHashRate(difficulty) + '\n' +
@@ -212,7 +211,7 @@ def formatWelcome(cache, window, bestHash, height, difficulty, bip9forks, thresh
             'bit is within the time ranges above, and if bits 31-30-29 are set to 0-0-1.\n' +
             'Signalling can start at the first retarget after the START time.\n' +
             'Lock-in threshold is ' + str(threshold) + '/' + str(window) + ' blocks (' +
-            '{:.2%}'.format(threshold / float(window)) + ')\n' +
+            formatPercent(threshold, window) + ')\n' +
             'See https://github.com/bitcoin/bips/blob/master/bip-0009.mediawiki\n')
 
 def formatBits(ver):
@@ -243,13 +242,28 @@ def findId(bit, time, bip9forks):
             return fid
     return UNKNOWN_ID
 
-def makeBitsTable(stats, tot, bip9forks):
-    return (('ID', 'BIT', 'BLOCKS', 'SHARE'),) + \
-           tuple((NO_BITS if ver == NO_BITS else findId(ver, datetime.now(), bip9forks),
-                  ver,
-                  stats[ver],
-                  formatPercent(stats[ver], tot))
-                 for ver in sortedStatsKeys(stats))
+def willLockIn(votes, threshold, window, tot, fid):
+    if fid in (NO_BITS, UNKNOWN_ID):
+        return 'no'
+    elif fid == BIP9_STATUS_LOCKEDIN or votes >= threshold + 6:
+        return 'yes'
+    elif votes >= threshold:
+        return 'very likely'
+    elif votes + window - tot < threshold:
+        return 'no'
+    else:
+        return 'maybe'
+
+def makeBitsTable(stats, tot, bip9forks, threshold, window):
+    def makeRow(ver):
+        fid = NO_BITS if ver == NO_BITS else findId(ver, datetime.now(), bip9forks)
+        return (fid,
+                ver,
+                stats[ver],
+                formatPercent(stats[ver], tot),
+                willLockIn(stats[ver], threshold, window, tot, fid))
+    return (('ID', 'BIT', 'BLOCKS', 'SHARE', 'WILL-LOCK-IN'),) + \
+           tuple(makeRow(ver) for ver in sortedStatsKeys(stats))
 
 def formatPercent(n, total):
     return '{:.2%}'.format(n / float(total))
@@ -261,7 +275,7 @@ def findBit(fid, bip9forks):
     # in the future the API could provide this information
     return BIP9_BIT_MAP.get(fid, UNKNOWN_BIT)
 
-def formatAllData(cache, bip9forks):
+def formatAllData(cache, bip9forks, threshold, window):
     tot = sum(cache.stats.values())
     return 'Version of all blocks since the last retarget: (can signal: o=yes *=no)\n' + \
            '\n' + \
@@ -269,12 +283,14 @@ def formatAllData(cache, bip9forks):
            '\n' + \
            formatTable(makeBitsTable(versionbitsStats(cache.stats),
                                      tot,
-                                     bip9forks))
+                                     bip9forks,
+                                     threshold,
+                                     window))
 
 def main():
     cachePath = os.path.join(tempfile.gettempdir(), CACHEFILE)
     cache = loadCache(cachePath, BASE64)
-    chainInfo = retrieve('getblockchaininfo')
+    chainInfo = rpcRetrieve('getblockchaininfo')
     bestHash = chainInfo['bestblockhash']
     height = int(chainInfo['blocks'])
     bip9forks = chainInfo['bip9_softforks']
@@ -283,10 +299,10 @@ def main():
     if cache.height == 0:
         print('Please wait while retrieving latest block versions and caching them...\n')
     if len(cache.hashes) < 1 or cache.hashes[0] != bestHash:
-        rpcRetriever = lambda h: retrieve('getblock', h)
-        cache = updateCache(cache, WINDOW, HASHES_SIZE, bestHash, height, rpcRetriever)
+        retrieveBlock = lambda h: rpcRetrieve('getblock', h)
+        cache = updateCache(cache, WINDOW, HASHES_SIZE, bestHash, height, retrieveBlock)
         saveCache(cache, cachePath, BASE64)
-    print(formatAllData(cache, bip9forks))
+    print(formatAllData(cache, bip9forks, THRESHOLD, WINDOW))
 
 if __name__ == "__main__":
     main()

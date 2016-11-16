@@ -12,13 +12,13 @@ An example of the output produced:
 
 ```
 BLOCKSVER - which BIP9 softfork will activate and when
-Best height: 438576 - 32 new blocks
-Best hash: 0000000000000000041da300c17ab6d11896c37b81eb88d3c90990c96cf6bf53
+Best height: 439267 - 0 new blocks
+Best hash: 000000000000000002716610b4aa7e3f4e76e05927fd3dd8cd3baf80c0d59219
 Network hashrate: 1823 Ph/s
 
-EVENT     AT BLOCK  DELTA   EXPECTED ON       EXPECTED IN
-retarget    439488     912  2016-11-19 00:28  6.3 days
-halving     630000  191424  2020-07-04 00:28  3.6 years
+EVENT     AT-BLOCK  DELTA   EXPECTED-ON       EXPECTED-IN
+retarget    439488     221  2016-11-18 10:43  1.5 days
+halving     630000  190733  2020-07-03 10:43  3.6 years
 
 ID      BIT  START       TIMEOUT     STATUS
 csv       0  2016-05-01  2017-05-01  active
@@ -34,12 +34,14 @@ Version of all blocks since the last retarget: (can signal: o=yes *=no)
 
 VERSION       28  24  20  16  12   8   4   0  BLOCKS  SHARE
                |   |   |   |   |   |   |   |
-0x20000000  ..*.............................    1065   96.38%
-0x00000004  .............................*..      21    1.90%
-0x30000000  ..*o............................      18    1.63%
-0x08000004  ....*........................*..       1    0.09%
-                                                1105  100.00%
-ID       BIT   BLOCKS  SHARE
-none     none    1087  98.37%
-unknown    28      18   1.63%
+0x20000000  ..*.............................    1710   95.21%
+0x30000000  ..*o............................      34    1.89%
+0x00000004  .............................*..      30    1.67%
+0x20000002  ..*...........................o.      19    1.06%
+0x08000004  ....*........................*..       3    0.17%
+                                                1796  100.00%
+ID       BIT   BLOCKS  SHARE   WILL-LOCK-IN
+none     none    1743  97.05%  no
+unknown    28      34   1.89%  no
+unknown     1      19   1.06%  no
 ```
